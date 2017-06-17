@@ -228,7 +228,7 @@ else ifeq ($(platform), vita)
 	CC = arm-vita-eabi-gcc$(EXE_EXT)
 	CXX = arm-vita-eabi-g++$(EXE_EXT)
 	AR = arm-vita-eabi-ar$(EXE_EXT)
-	PLATFORM_DEFINES := -DBRANCHLESS_GBA_GFX -DVITA
+	PLATFORM_DEFINES := -DVITA -DBRANCHLESS_GBA_GFX
 	__FLAGS := -marm -mfpu=neon -mtune=cortex-a9 -mcpu=cortex-a9 -mfloat-abi=hard -mword-relocations
 	__FLAGS += -fno-optimize-sibling-calls -fno-strict-aliasing -fno-partial-inlining -fno-tree-vrp
 	__FLAGS += -ffast-math -fsingle-precision-constant -funroll-loops -ftracer
@@ -242,7 +242,7 @@ else ifeq ($(platform), vita)
 	USE_TWEAKS=1
 	USE_THREADED_RENDERER=1
 	USE_MOTION_SENSOR=1
-    USE_FRAME_SKIP=1
+    USE_FRAME_SKIP=0
 	HAVE_NEON=1
 # Libxenon
 else ifeq ($(platform), xenon)

@@ -73,6 +73,11 @@ typedef void (*renderfunc_t)(void);
 template<int renderer_idx>
 renderfunc_t GetRenderFunc(int mode, int type);
 
+#ifdef BRANCHLESS_GBA_GFX
+inline static int32_t min(int32_t a, int32_t b) { return b + ((a-b) & (a-b)>>31); }
+inline static int32_t max(int32_t a, int32_t b) { return a - ((a-b) & (a-b)>>31); }
+#else
+
 inline static long max(int p, int q) { return p > q ? p : q; }
 inline static long max(long p, int q) { return p > q ? p : q; }
 inline static long max(int p, long q) { return p > q ? p : q; }
@@ -81,6 +86,7 @@ inline static long min(int p, int q) { return p < q ? p : q; }
 inline static long min(long p, int q) { return p < q ? p : q; }
 inline static long min(int p, long q) { return p < q ? p : q; }
 inline static long min(long p, long q) { return p < q ? p : q; }
+#endif
 
 uint8_t *rom = 0;
 uint8_t *bios = 0;
@@ -345,6 +351,7 @@ static INLINE u32 gfxDecreaseBrightness(u32 color, int coeff) {
 	return (color >> 16) | color;
 }
 
+/*
 static u32 AlphaClampLUT[64] = 
 {
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
@@ -352,30 +359,17 @@ static u32 AlphaClampLUT[64] =
 	0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F,
 	0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F
 };  
-
-#define GFX_ALPHA_BLEND(color, color2, ca, cb) {                                                         \
-	int r = AlphaClampLUT[(((color & 0x1F) * ca) >> 4) + (((color2 & 0x1F) * cb) >> 4)];                 \
-	int g = AlphaClampLUT[((((color >> 5) & 0x1F) * ca) >> 4) + ((((color2 >> 5) & 0x1F) * cb) >> 4)];   \
-	int b = AlphaClampLUT[((((color >> 10) & 0x1F) * ca) >> 4) + ((((color2 >> 10) & 0x1F) * cb) >> 4)]; \
-	color = (color & 0xFFFF0000) | (b << 10) | (g << 5) | r;	\
+*/
+#ifdef BRANCHLESS_GBA_GFX
+inline uint32_t AlphaClampLUT(uint32_t x) {
+	int32_t p = 0x1 & (~((int32_t)x - 32) >> 31);
+	return (p * 31) + (1 - p) * x;
 }
-
-#define brightness_switch()                                                                \
-	switch(RENDERER_R_BLDCNT_Color_Special_Effect) { \
-		case SpecialEffect_Brightness_Increase:                                            \
-			color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]); break;               \
-		case SpecialEffect_Brightness_Decrease:                                            \
-			color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]); break;               \
-	}
-
-#define alpha_blend_brightness_switch()                                                    \
-	if(RENDERER_R_BLDCNT_IsTarget2(top2)) { \
-		if(color < 0x80000000) {	\
-			GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]); \
-		} else if (RENDERER_R_BLDCNT_IsTarget1(top)) { \
-			brightness_switch();                                                           \
-		} \
-	}
+#else
+inline uint32_t AlphaClampLUT(uint32_t x) {
+	return x < 0x1F ? x : 0x1F;
+}
+#endif
 
 #ifdef USE_SWITICKS
 extern int SWITicks;
@@ -406,10 +400,46 @@ const int table [0x40] =
 		0xFF38,0xFF39,0xFF3A,0xFF3B,0xFF3C,0xFF3D,0xFF3E,0xFF3F,
 };
 
+/*
 static int coeff[32] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 
 			11, 12, 13, 14, 15, 16, 16, 16, 16,
 			16, 16, 16, 16, 16, 16, 16, 16, 16,
 			16, 16, 16};
+*/
+#ifdef BRANCHLESS_GBA_GFX
+inline int32_t coeff(uint32_t x) {
+	int32_t p = 0x1 & (~((int32_t)x - 16) >> 31);
+	return (p << 4) + (1 - p) * x;
+}
+#else
+inline int32_t coeff(uint32_t x) { 
+	return x < 16 ? x : 16; 
+}
+#endif
+
+#define GFX_ALPHA_BLEND(color, color2, ca, cb) {                                                         \
+	int r = AlphaClampLUT((((color & 0x1F) * ca) >> 4) + (((color2 & 0x1F) * cb) >> 4));                 \
+	int g = AlphaClampLUT(((((color >> 5) & 0x1F) * ca) >> 4) + ((((color2 >> 5) & 0x1F) * cb) >> 4));   \
+	int b = AlphaClampLUT(((((color >> 10) & 0x1F) * ca) >> 4) + ((((color2 >> 10) & 0x1F) * cb) >> 4)); \
+	color = (color & 0xFFFF0000) | (b << 10) | (g << 5) | r;	\
+}
+
+#define brightness_switch()                                                                \
+	switch(RENDERER_R_BLDCNT_Color_Special_Effect) { \
+		case SpecialEffect_Brightness_Increase:                                            \
+			color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F)); break;               \
+		case SpecialEffect_Brightness_Decrease:                                            \
+			color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F)); break;               \
+	}
+
+#define alpha_blend_brightness_switch()                                                    \
+	if(RENDERER_R_BLDCNT_IsTarget2(top2)) { \
+		if(color < 0x80000000) {	\
+			GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F)); \
+		} else if (RENDERER_R_BLDCNT_IsTarget1(top)) { \
+			brightness_switch();                                                           \
+		} \
+	}
 
 static uint8_t biosProtected[4];
 static uint8_t cpuBitsSet[256];
@@ -9411,18 +9441,18 @@ static void mode0RenderLineNoWindow (void)
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		} else {
@@ -9621,15 +9651,15 @@ static void mode0RenderLineAll (void)
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
-					color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+					color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
-					color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+					color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		}
@@ -9842,17 +9872,17 @@ static void mode1RenderLineNoWindow (void)
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		} else {
@@ -10037,17 +10067,17 @@ static void mode1RenderLineAll (void)
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		}
@@ -10237,17 +10267,17 @@ static void mode2RenderLineNoWindow (void)
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		} else {
@@ -10400,17 +10430,17 @@ static void mode2RenderLineAll (void)
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		}
@@ -10541,18 +10571,18 @@ INIT_RENDERER_CONTEXT(renderer_idx);
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		} else {
@@ -10671,17 +10701,17 @@ static void mode3RenderLineAll (void)
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		}
@@ -10812,17 +10842,17 @@ static void mode4RenderLineNoWindow (void)
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		} else {
@@ -10942,17 +10972,17 @@ static void mode4RenderLineAll (void)
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		}
@@ -11082,18 +11112,18 @@ static void mode5RenderLineNoWindow (void)
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		} else {
@@ -11212,17 +11242,17 @@ static void mode5RenderLineAll (void)
 
 						if(RENDERER_R_BLDCNT_IsTarget2(top2) && color < 0x80000000)
 						{
-							GFX_ALPHA_BLEND(color, back, coeff[COLEV & 0x1F], coeff[(COLEV >> 8) & 0x1F]);
+							GFX_ALPHA_BLEND(color, back, coeff(COLEV & 0x1F), coeff((COLEV >> 8) & 0x1F));
 						}
 					}
 					break;
 				case SpecialEffect_Brightness_Increase:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxIncreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxIncreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 				case SpecialEffect_Brightness_Decrease:
 					if(RENDERER_R_BLDCNT_IsTarget1(top))
-						color = gfxDecreaseBrightness(color, coeff[COLY & 0x1F]);
+						color = gfxDecreaseBrightness(color, coeff(COLY & 0x1F));
 					break;
 			}
 		}
